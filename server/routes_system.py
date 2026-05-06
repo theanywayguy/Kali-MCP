@@ -70,7 +70,20 @@ def generic_command():
 @system_bp.route("/health", methods=["GET"])
 def health_check():
     """Return server health and tool availability."""
-    essential_tools = ["nmap", "gobuster", "dirb", "nikto"]
+    essential_tools = [
+        # Scanning
+        "nmap", "masscan", "netdiscover",
+        # Web
+        "gobuster", "dirb", "ffuf", "nikto", "whatweb", "wpscan", "sqlmap",
+        # Exploitation
+        "msfconsole", "msfvenom", "searchsploit",
+        # Credentials
+        "hydra", "john", "hashcat",
+        # Windows / AD
+        "enum4linux", "smbclient", "crackmapexec",
+        # Network
+        "tshark", "tcpdump", "nc",
+    ]
     tools_status = {}
 
     for tool in essential_tools:
