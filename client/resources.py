@@ -54,9 +54,10 @@ def register_resources(mcp: FastMCP, kali_client: KaliToolsClient) -> None:
             "sqlmap_scan":          "Automated SQL injection tester",
             "http_request":         "Make HTTP/HTTPS requests with full curl flexibility",
             # Exploitation
-            "metasploit_run":       "Exploitation framework module runner",
+            "metasploit_run":       "Fire-and-forget Metasploit module via resource script",
+            "msf_console":          "Interactive Metasploit session over a real PTY — use for multi-step flows, session interaction, post modules",
             "searchsploit":         "Search Exploit-DB offline archive by service/version",
-            "msfvenom_generate":    "Generate reverse shell / bind shell payloads",
+            "msfvenom_generate":    "Generate reverse shell / bind shell payloads (output_file required)",
             "start_listener":       "Start a netcat listener to catch reverse shells",
             # Credentials
             "hydra_attack":         "Online password brute-forcer",
@@ -67,14 +68,14 @@ def register_resources(mcp: FastMCP, kali_client: KaliToolsClient) -> None:
             "smbclient_interact":   "Read and download files from SMB shares",
             "crackmapexec":         "SMB/AD Swiss army knife — spray, PTH, exec",
             # Post-exploitation
-            "ssh_command":          "Run commands on a remote host over SSH",
+            "ssh_command":          "Run a single command on a remote host over SSH",
             "run_linpeas":          "Upload and run LinPEAS/WinPEAS for privesc enum",
             # Network / traffic
-            "tshark_capture":       "Live packet capture and traffic analysis",
-            "tshark_read_pcap":     "Read and analyse existing .pcap files",
-            "tcpdump_capture":      "Lightweight packet capture",
+            "tshark":               "Live packet capture and traffic analysis",
+            "tshark_pcap":          "Read and analyse existing .pcap files",
+            "tcpdump":              "Lightweight packet capture",
             # Utility
-            "execute_command":      "Run any arbitrary shell command",
+            "execute_shell":        "Run any arbitrary shell command on the Kali server",
             "server_health":        "Check tool availability on the Kali server",
         }
         return json.dumps(tools, indent=2)

