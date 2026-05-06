@@ -72,7 +72,7 @@ class CommandExecutor:
                 self.return_code = -1
 
             has_output = bool(self.stdout_data or self.stderr_data)
-            success = (self.timed_out and has_output) or (self.return_code == 0)
+            success = (self.timed_out and has_output) and (self.return_code == 0)
 
             return {
                 "stdout":          self.stdout_data,

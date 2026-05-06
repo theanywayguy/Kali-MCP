@@ -327,7 +327,8 @@ def tshark():
         if not interface:
             return jsonify({"error": "Interface parameter is required"}), 400
 
-        command = ["tshark", "-i", interface, "-a", f"duration:{duration}"]
+        # -q suppresses the per-packet summary noise; only stats/results are printed
+        command = ["tshark", "-q", "-i", interface, "-a", f"duration:{duration}"]
         if capture_filter:
             command += ["-f", capture_filter]
         if additional_args:
@@ -610,7 +611,8 @@ def linpeas():
         err = stderr.read().decode("utf-8", errors="replace")
 
         # Strip ANSI escape codes so the output is readable in MCP
-        ansi_escape = re.compile(r"\x1b\[[0-9;]*[mGKHF]")
+        # Covers colour codes, cursor movement, erase sequences, and OSC strings
+        ansi_escape = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-9;]*[ -/]*[@-~]|\][^\x07]*\x07)")
         out = ansi_escape.sub("", out)
 
         client.close()
@@ -682,6 +684,16 @@ def msfvenom():
         if not payload:
             return jsonify({"error": "Payload parameter is required"}), 400
 
+        # Without -o msfvenom writes raw binary to stdout which corrupts JSON.
+        # Require an output_file so the binary goes to disk; stdout carries only
+        # the progress/status lines which are safe to return as text.
+        if not output_file:
+            return jsonify({
+                "error": "output_file is required — msfvenom writes binary to stdout "
+                         "which would corrupt the JSON response. "
+                         "Provide a path e.g. \"/tmp/shell.elf\"."
+            }), 400
+
         command = ["msfvenom", "-p", payload]
         if lhost:
             command.append(f"LHOST={lhost}")
@@ -692,12 +704,20 @@ def msfvenom():
             command += ["-e", encoder]
         if iterations:
             command += ["-i", str(iterations)]
-        if output_file:
-            command += ["-o", output_file]
+        command += ["-o", output_file]
         if additional_args:
             command += shlex.split(additional_args)
 
-        return jsonify(execute_command(command))
+        result = execute_command(command)
+
+        # Confirm the file actually landed on disk
+        result["output_file"]   = output_file
+        result["file_created"]  = os.path.isfile(output_file)
+        if not result["file_created"]:
+            result["success"] = False
+            result["warning"] = f"Command completed but {output_file} was not found — check stderr."
+
+        return jsonify(result)
     except Exception as e:
         logger.error(f"Error in msfvenom endpoint: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Server error: {e}"}), 500
@@ -716,7 +736,10 @@ def hashcat():
         wordlist        = params.get("wordlist", "/usr/share/wordlists/rockyou.txt")
         attack_mode     = params.get("attack_mode", "0")   # 0=dict, 3=brute, 6=hybrid
         rules           = params.get("rules", "")
-        additional_args = params.get("additional_args", "--force")
+        # --force removed from default: it bypasses GPU safety checks and can
+        # cause incorrect results or hardware issues on real machines.
+        # Pass additional_args="--force" explicitly if running inside a VM.
+        additional_args = params.get("additional_args", "")
 
         if not hash_file or not hash_type:
             return jsonify({"error": "hash_file and hash_type are required"}), 400
@@ -731,7 +754,6 @@ def hashcat():
     except Exception as e:
         logger.error(f"Error in hashcat endpoint: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Server error: {e}"}), 500
-
 
 # ---------------------------------------------------------------------------
 # Smbclient
@@ -756,7 +778,12 @@ def smbclient():
         command = ["smbclient", unc]
 
         if username:
-            command += ["-U", f"{username}%{password}" if password else username]
+            # Pass credentials via environment variable instead of the command
+            # line — prevents the password appearing in `ps aux` / /proc/cmdline
+            command += ["-U", username]
+            if password:
+                import subprocess as _sp  # already imported via execute_command path
+                os.environ["PASSWD"] = password   # smbclient reads this automatically
         else:
             command.append("-N")   # anonymous / no-pass
 
@@ -885,4 +912,116 @@ def listener():
         return jsonify(execute_command(command))
     except Exception as e:
         logger.error(f"Error in listener endpoint: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Metasploit — interactive TTY session via pexpect
+# ---------------------------------------------------------------------------
+@tools_bp.route("/msf_console", methods=["POST"])
+def msf_console():
+    """
+    Drive msfconsole interactively over a real PTY using pexpect.
+
+    Accepts a list of commands to send in sequence.  Each command is sent
+    after the previous prompt is seen, so multi-step flows work correctly:
+
+        use exploit/...  →  set RHOSTS ...  →  run  →  sessions -i 1  →  whoami
+
+    The full transcript (everything msfconsole printed) is returned so the
+    agent can read output at each step.
+    """
+    try:
+        import pexpect
+
+        params        = request.json
+        commands      = params.get("commands", [])        # list of strings
+        prompt_regex  = params.get("prompt_regex", r"msf\d*\s[>\(][^)]*[>\)]\s*$")
+        step_timeout  = int(params.get("step_timeout", 30))   # per-command wait
+        startup_timeout = int(params.get("startup_timeout", 60))
+
+        if not commands:
+            return jsonify({"error": "commands list is required"}), 400
+
+        transcript = ""
+
+        child = pexpect.spawnu(
+            "msfconsole -q",
+            timeout=startup_timeout,
+            codec_errors="replace",
+        )
+
+        # Collect everything msfconsole prints
+        def _flush():
+            nonlocal transcript
+            transcript += child.before or ""
+            transcript += child.after  if isinstance(child.after, str) else ""
+
+        # Wait for the first prompt before sending anything
+        try:
+            child.expect(prompt_regex, timeout=startup_timeout)
+            _flush()
+        except pexpect.TIMEOUT:
+            child.close(force=True)
+            return jsonify({
+                "error":      "msfconsole did not produce a prompt within startup_timeout",
+                "transcript": transcript + (child.before or ""),
+                "success":    False,
+            }), 500
+        except pexpect.EOF:
+            child.close(force=True)
+            return jsonify({
+                "error":      "msfconsole exited unexpectedly during startup",
+                "transcript": transcript + (child.before or ""),
+                "success":    False,
+            }), 500
+
+        step_results = []
+
+        for cmd in commands:
+            child.sendline(cmd)
+            try:
+                child.expect(prompt_regex, timeout=step_timeout)
+                _flush()
+                step_results.append({"command": cmd, "output": child.before or "", "success": True})
+            except pexpect.TIMEOUT:
+                # Capture whatever arrived so far — useful for long-running exploits
+                partial = child.before or ""
+                transcript += partial
+                step_results.append({
+                    "command": cmd,
+                    "output":  partial,
+                    "success": False,
+                    "note":    f"Timed out after {step_timeout}s waiting for prompt",
+                })
+                # Don't abort — the agent may still want to send more commands
+            except pexpect.EOF:
+                partial = child.before or ""
+                transcript += partial
+                step_results.append({
+                    "command": cmd,
+                    "output":  partial,
+                    "success": False,
+                    "note":    "msfconsole exited (EOF)",
+                })
+                break
+
+        # Graceful exit
+        try:
+            child.sendline("exit -y")
+            child.expect(pexpect.EOF, timeout=10)
+            transcript += child.before or ""
+        except Exception:
+            child.close(force=True)
+
+        return jsonify({
+            "transcript":   transcript,
+            "step_results": step_results,
+            "success":      all(s["success"] for s in step_results),
+        })
+
+    except ImportError:
+        return jsonify({"error": "pexpect not installed — run: pip install pexpect"}), 500
+    except Exception as e:
+        logger.error(f"Error in msf_console endpoint: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Server error: {e}"}), 500

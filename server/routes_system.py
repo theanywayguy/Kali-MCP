@@ -9,7 +9,10 @@ Flask Blueprint for system-level endpoints:
 """
 
 import logging
+import re
 import traceback
+
+from flask import Blueprint, jsonify, request
 
 from flask import Blueprint, jsonify, request
 
@@ -23,15 +26,37 @@ system_bp = Blueprint("system", __name__)
 # ---------------------------------------------------------------------------
 # Generic command execution
 # ---------------------------------------------------------------------------
+
+# Commands that must never reach the shell regardless of caller intent.
+_BLOCKED_PATTERNS = re.compile(
+    r"\b(rm\s+-rf\s+/|mkfs|dd\s+if=|:()\{:|fork\s*bomb|shutdown|reboot|halt|poweroff)\b",
+    re.IGNORECASE,
+)
+
 @system_bp.route("/api/command", methods=["POST"])
 def generic_command():
-    """Execute any shell command provided in the request body."""
+    """
+    Execute a shell command on the Kali server.
+
+    Accepts either:
+      - A string  → passed to the shell (supports pipes, redirection, etc.)
+      - A list    → execv-style, no shell involved (safer for known binaries)
+
+    A small blocklist rejects obviously destructive patterns even when
+    called by the agent; it is not a security boundary but a guard against
+    accidental self-destruction.
+    """
     try:
         params  = request.json
         command = params.get("command", "")
 
         if not command:
             return jsonify({"error": "Command parameter is required"}), 400
+
+        # Blocklist check for string commands only
+        if isinstance(command, str) and _BLOCKED_PATTERNS.search(command):
+            logger.warning(f"Blocked dangerous command: {command!r}")
+            return jsonify({"error": "Command rejected — matches destructive pattern blocklist"}), 400
 
         return jsonify(execute_command(command))
     except Exception as e:

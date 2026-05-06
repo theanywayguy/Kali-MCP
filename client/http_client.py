@@ -14,7 +14,17 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REQUEST_TIMEOUT = 300   # 5 minutes — long scans need this
+DEFAULT_REQUEST_TIMEOUT = 300   # 5 minutes — default for most tools
+
+# Tools that routinely run longer than the default
+_LONG_RUNNING_TIMEOUTS = {
+    "api/tools/linpeas":    600,   # 10 min — full PEAS sweep
+    "api/tools/hashcat":    900,   # 15 min — GPU cracking
+    "api/tools/john":       600,   # 10 min — CPU cracking
+    "api/tools/nikto":      600,   # 10 min — deep web scan
+    "api/tools/sqlmap":     600,   # 10 min — blind injection timing
+    "api/tools/msf_console": 600,  # 10 min — interactive MSF session
+}
 
 
 class KaliToolsClient:
@@ -49,10 +59,15 @@ class KaliToolsClient:
         HTTP POST helper — same pattern as safe_get.
 
         All mutating tool calls are POSTs because they have a body and side-effects.
+        Long-running tools get an automatically elevated timeout from
+        _LONG_RUNNING_TIMEOUTS so callers don't have to think about it.
         """
-        url = f"{self.server_url}/{endpoint}"
+        url     = f"{self.server_url}/{endpoint}"
+        # Strip leading slash for consistent key lookup
+        key     = endpoint.lstrip("/")
+        timeout = _LONG_RUNNING_TIMEOUTS.get(key, self.timeout)
         try:
-            response = requests.post(url, json=json_data, timeout=self.timeout)
+            response = requests.post(url, json=json_data, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
