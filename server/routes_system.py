@@ -7,7 +7,7 @@ Flask Blueprint for system-level endpoints:
   - GET  /mcp/capabilities        (stub)
   - POST /mcp/tools/kali_tools/<tool_name>  (stub)
 """
-
+import shutil
 import logging
 import re
 import traceback
@@ -88,8 +88,8 @@ def health_check():
 
     for tool in essential_tools:
         try:
-            result = execute_command(["which", tool])
-            tools_status[tool] = result["success"]
+            
+            tools_status[tool] = shutil.which(tool) is not None
         except Exception:
             tools_status[tool] = False
 
