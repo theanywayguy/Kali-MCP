@@ -936,7 +936,7 @@ def msf_console():
 
         params        = request.json
         commands      = params.get("commands", [])        # list of strings
-        prompt_regex  = params.get("prompt_regex", r"msf\d*\s[>\(][^)]*[>\)]\s*$")
+        prompt_regex  = params.get("prompt_regex", r"msf")
         step_timeout  = int(params.get("step_timeout", 30))   # per-command wait
         startup_timeout = int(params.get("startup_timeout", 60))
 
